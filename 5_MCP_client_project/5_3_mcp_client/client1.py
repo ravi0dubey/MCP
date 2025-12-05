@@ -3,6 +3,7 @@ import os
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
+from langchain_core.messages import ToolMessage
 
 
 load_dotenv()
@@ -34,17 +35,19 @@ async def main():
     llm= ChatOpenAI(model= "gpt-5", api_key=os.getenv("OPEN_API_KEY"))   
     llm_with_tools = llm.bind_tools(tools)
 
-    prompt1 = "What is the sum of 15.5 and 24.3 using maths_cal tool?"
-    
-    response = await llm_with_tools.ainvoke(prompt1)
+    prompt = "What is the sum of 15.5 and 24.3 using maths_cal tool?" 
+    response = await llm_with_tools.ainvoke(prompt)
+
     selected_tool = response.tool_calls[0]["name"]
     selected_tool_args = response.tool_calls[0]["args"]
+    selected_tool_id = response.tool_calls[0]["id"]
     
-    # print(f"selected_tool: {selected_tool}\n")
-    # print(f"selected_tool_args: {selected_tool_args}\n")
+    tool_result = await named_tools[selected_tool].ainvoke(selected_tool_args)
+    
+    tool_message = ToolMessage(content=str(tool_result),  tool_call_id=selected_tool_id)
 
-    tool_result1 = await named_tools[selected_tool].ainvoke(selected_tool_args)
-    print(f"Q: {prompt1}\nA: {tool_result1}\n")
+    final_response = await llm_with_tools.ainvoke([prompt, response, tool_message])
+    print(f"Final Response: {final_response.content}")
 
 if __name__ == '__main__':
     asyncio.run(main())
