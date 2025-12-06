@@ -1,5 +1,6 @@
 import asyncio
 import os
+import json
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
@@ -7,6 +8,9 @@ from langchain_core.messages import ToolMessage
 
 
 load_dotenv()
+
+# Step 1: Define MCP Servers
+#    1.1: First server is maths_cal (local server) running on stdio transport used for mathematical calculations
 
 SERVERS = {
     "maths_cal": {
@@ -24,6 +28,8 @@ SERVERS = {
     },
 }
 
+# Step 2: Create MCP Client and connect with the MCP Servers. 
+#    2.1: Retrieve the list of available tools and save them in a dictionary for easy access later.
 async def main():
     # initialize the MultiserverMCPClient with server address
     client = MultiServerMCPClient(SERVERS)
@@ -32,22 +38,39 @@ async def main():
     for tool in tools:
         named_tools[tool.name] = tool
 
+# Step 3: Initialize LLM and bind tools
     llm= ChatOpenAI(model= "gpt-5", api_key=os.getenv("OPEN_API_KEY"))   
     llm_with_tools = llm.bind_tools(tools)
 
-    prompt = "What is the sum of 15.5 and 24.3 using maths_cal tool?" 
+# Step 4: Give prompt to the LLM with tools and get response.
+    prompt = "What is the quotient of 151.5 divided  7.3 using maths_cal tool?" 
+    # prompt = "Who is hosting fifa world cup 2026?" 
     response = await llm_with_tools.ainvoke(prompt)
 
-    selected_tool = response.tool_calls[0]["name"]
-    selected_tool_args = response.tool_calls[0]["args"]
-    selected_tool_id = response.tool_calls[0]["id"]
-    
-    tool_result = await named_tools[selected_tool].ainvoke(selected_tool_args)
-    
-    tool_message = ToolMessage(content=str(tool_result),  tool_call_id=selected_tool_id)
+# Step 5: If there is no tool call, print normal LLM response
+    if not getattr(response, "tool_calls", None):
+        print(f"Response from LLM : {response.content}")
+        return
 
-    final_response = await llm_with_tools.ainvoke([prompt, response, tool_message])
-    print(f"Final Response: {final_response.content}")
+# Step 6: If there are tool calls, execute them and send results back to LLM for final response  
+#    6.1: Loops over each tool call (GPT-5 can call multiple tools in one response).
+#    6.2: Runs the actual MCP tool with the arguments GPT-5 provided.
+#    6.3: Creates a ToolMessage that sends the tool’s output back to GPT-5
+    tool_message  = []
+    for tool_call in response.tool_calls:      
+        selected_tool = tool_call["name"]
+        selected_tool_args = tool_call["args"] or {}
+        selected_tool_id = tool_call["id"]
+        result = await named_tools[selected_tool].ainvoke(selected_tool_args)
+        tool_message.append(ToolMessage(tool_call_id=selected_tool_id, content=json.dumps(result)))
+
+# Step 7: Send the tool results back to LLM for final response
+#      7.1 : The prompt is also sent back to provide context.
+#      7.2 : The original response from LLM is also sent back to provide context.
+#      7.3 : The tool messages containing the tool results are also sent back.
+#  
+    final_response = await llm_with_tools.ainvoke([prompt, response, *tool_message])
+    print(f"Response from LLM Tool is : {final_response.content}")
 
 if __name__ == '__main__':
     asyncio.run(main())
